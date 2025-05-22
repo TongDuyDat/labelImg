@@ -53,6 +53,8 @@ from libs.create_ml_io import JSON_EXT
 from libs.ustr import ustr
 from libs.hashableQListWidgetItem import HashableQListWidgetItem
 
+from import_labels import YoloLabelManager
+
 __appname__ = 'labelImg'
 
 
@@ -96,15 +98,20 @@ class MainWindow(QMainWindow, WindowMixin):
         # Save as Pascal voc xml
         self.default_save_dir = default_save_dir
         self.label_file_format = settings.get(SETTING_LABEL_FILE_FORMAT, LabelFileFormat.PASCAL_VOC)
-
+        self.image_last_open_dir = None
         # For loading all image under a directory
         self.m_img_list = []
         self.img_paths = []
+        self.image_from_dir = list(map(os.path.basename, self.m_img_list))
         self.dir_name = None
         self.label_hist = []
         self.last_open_dir = None
         self.cur_img_idx = 0
         self.img_count = len(self.img_paths)
+        self.temp_data = {
+            "images": [],
+            "labels": [],
+        }
 
         # Whether we need to save or not.
         self.dirty = False
@@ -178,13 +185,17 @@ class MainWindow(QMainWindow, WindowMixin):
         #Thêm QLineEdit cho chức năng tìm kiếm
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Tìm kiếm file...")
+        self.label_search_box = QLineEdit()
+        self.label_search_box.setPlaceholderText("Tìm kiếm theo nhãn...")
         # Kết nối sự kiện nhấn Enter
         self.search_box.returnPressed.connect(self.filter_file_list)
+        self.label_search_box.returnPressed.connect(self.search_by_label)
         self.file_list_widget = QListWidget()
         self.file_list_widget.itemDoubleClicked.connect(self.file_item_double_clicked)
         file_list_layout = QVBoxLayout()
         file_list_layout.setContentsMargins(0, 0, 0, 0)
         file_list_layout.addWidget(self.search_box)
+        file_list_layout.addWidget(self.label_search_box)
         file_list_layout.addWidget(self.file_list_widget)
         file_list_container = QWidget()
         file_list_container.setLayout(file_list_layout)
@@ -223,7 +234,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         self.dock_features = QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetFloatable
         self.dock.setFeatures(self.dock.features() ^ self.dock_features)
-
+        self.label_manager = YoloLabelManager(db_path="image_labels.db")
         # Actions
         action = partial(new_action, self)
         quit = action(get_str('quit'), self.close,
@@ -253,7 +264,10 @@ class MainWindow(QMainWindow, WindowMixin):
 
         save = action(get_str('save'), self.save_file,
                       'Ctrl+S', 'save', get_str('saveDetail'), enabled=False)
-
+        
+        import_data = action(get_str('importData'), self.import_data,
+                             'Ctrl+I', 'import', get_str('importDataDetail'))
+            
         def get_format_meta(format):
             """
             returns a tuple containing (title, icon_name) of the selected format
@@ -401,6 +415,7 @@ class MainWindow(QMainWindow, WindowMixin):
                               zoomActions=zoom_actions,
                               lightBrighten=light_brighten, lightDarken=light_darken, lightOrg=light_org,
                               lightActions=light_actions,
+                              import_data=import_data,
                               fileMenuActions=(
                                   open, open_dir, save, save_as, close, reset_all, quit),
                               beginner=(), advanced=(),
@@ -463,7 +478,7 @@ class MainWindow(QMainWindow, WindowMixin):
         self.actions.beginner = (
             open, open_dir, change_save_dir, open_next_image, open_prev_image, verify, save, save_format, None, create, copy, delete, None,
             zoom_in, zoom, zoom_out, fit_window, fit_width, None,
-            light_brighten, light, light_darken, light_org)
+            light_brighten, light, light_darken, light_org, import_data)
 
         self.actions.advanced = (
             open, open_dir, change_save_dir, open_next_image, open_prev_image, save, save_format, None,
@@ -550,6 +565,28 @@ class MainWindow(QMainWindow, WindowMixin):
         # Open Dir if default file
         if self.file_path and os.path.isdir(self.file_path):
             self.open_dir_dialog(dir_path=self.file_path, silent=True)
+            
+    def import_data(self):
+            """Mở dialog để chọn thư mục và nhập dữ liệu YOLO."""
+            # Mở dialog chọn thư mục
+            # get_str = lambda str_id: self.string_bundle.get_string(str_id)
+            if self.default_save_dir is not None:
+                path = ustr(self.default_save_dir)
+            else:
+                path = '.'
+            directory = ustr(QFileDialog.getExistingDirectory(self,
+                                                         '%s - Save annotations to the directory' % __appname__, path,  QFileDialog.ShowDirsOnly
+                                                         | QFileDialog.DontResolveSymlinks))
+            
+            if not directory:
+                return  # Người dùng hủy chọn
+            
+            try:
+                # Nhập dữ liệu bằng YoloLabelManager
+                self.label_manager.import_yolo_data(directory)
+                print("Nhập dữ liệu thành công từ thư mục:", directory)
+            except Exception as e:
+                print("Lỗi nhập dữ liệu:", str(e))
     def filter_file_list(self):
         filter_text = self.search_box.text().lower()
         self.file_list_widget.blockSignals(True)  # Tạm dừng tín hiệu nếu cần tránh loop
@@ -567,8 +604,52 @@ class MainWindow(QMainWindow, WindowMixin):
                 self.file_list_widget.addItem(item)
                 self.file_list_widget.setCurrentRow(0)  # Chọn item đầu tiên trong danh sách đã lọc
             self.img_paths = self.m_img_list  # Cập nhật danh sách ảnh đã lọc
-            self.img_count = len(filtered)  # Cập nhật số lượng ảnh đã lọc
+            self.img_count = len(self.m_img_list)  # Cập nhật số lượng ảnh đã lọc
         self.file_list_widget.blockSignals(False)
+        
+    def search_by_label(self):
+        """Tìm kiếm ảnh theo nhãn từ QLineEdit mới."""
+        label_id = self.label_search_box.text().strip()
+        self.file_list_widget.blockSignals(True)  # Tạm dừng tín hiệu nếu cần tránh loop
+        self.file_list_widget.clear()
+        print("Tìm kiếm nhãn:", label_id)
+        if label_id:
+            try:
+                # Lấy danh sách ảnh từ YoloLabelManager
+                images = self.label_manager.filter_images_by_label(label_id)
+                images_name = set([os.path.basename(image["image_id"]) for image in images])
+                filtered = set()
+                for image in images_name:
+                    # Lọc danh sách ảnh theo tên
+                    if f"{image}.jpg" in self.image_from_dir:
+                        idx = self.image_from_dir.index(f"{image}.jpg")    
+                        filtered.add(self.m_img_list[idx])
+                if len(filtered) > 0:
+                    self.file_list_widget.addItems(filtered)
+                    self.file_list_widget.setCurrentRow(0)
+                    self.img_paths = list(filtered)
+                    self.label_img_count = len(filtered)
+            except Exception as e:
+                # self.show_error(f"{get_str('searchFailed')}: {str(e)}")
+                print("lỗi tìm kiếm nhãn:", str(e))
+                pass
+        else:
+            # Hiển thị tất cả ảnh từ SQLite (tùy chọn)
+            try:
+                self.cursor.execute("SELECT file_name FROM images")
+                filtered = [os.path.join(self.label_manager.selected_dir, row[0]) for row in self.cursor.fetchall()]
+                # print(filtered)
+                if len(filtered) > 0:
+                    self.file_list_widget.addItems(filtered)
+                    self.file_list_widget.setCurrentRow(0)
+                    self.img_paths = filtered
+                    self.label_img_count = len(filtered)
+            except Exception as e:
+                # self.show_error(f"{get_str('searchFailed')}: {str(e)}")
+                print("lỗi tìm kiếm nhãn:", str(e))
+        
+        self.file_list_widget.blockSignals(False)
+        
     def keyReleaseEvent(self, event):
         if event.key() == Qt.Key_Control:
             self.canvas.set_drawing_shape_to_square(False)
@@ -1335,12 +1416,20 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if dir_path is not None and len(dir_path) > 1:
             self.default_save_dir = dir_path
-
-        self.show_bounding_box_from_annotation_file(self.file_path)
-
+        try: 
+            self.show_bounding_box_from_annotation_file(self.file_path)
+            self.label_manager.import_yolo_data(dir_path)
+            print("Nhập dữ liệu thành công từ thư mục:", dir_path)
+        except Exception as e:
+            print("Lỗi khi nhập dữ liệu từ thư mục:", e)
+            self.statusBar().showMessage('Error importing data from %s' % dir_path)
         self.statusBar().showMessage('%s . Annotation will be saved to %s' %
                                      ('Change saved folder', self.default_save_dir))
         self.statusBar().show()
+        if self.file_path:
+            self.show_bounding_box_from_annotation_file(self.file_path)
+        else:
+            self.statusBar().showMessage('No image loaded. Please load an image first.')
 
 
     def open_annotation_dialog(self, _value=False):
@@ -1394,12 +1483,13 @@ class MainWindow(QMainWindow, WindowMixin):
     def import_dir_images(self, dir_path):
         if not self.may_continue() or not dir_path:
             return
-
+        self.image_last_open_dir = dir_path
         self.last_open_dir = dir_path
         self.dir_name = dir_path
         self.file_path = None
         self.file_list_widget.clear()
         self.m_img_list = self.scan_all_images(dir_path)
+        self.image_from_dir = list(map(os.path.basename, self.m_img_list))
         self.img_paths = self.m_img_list
         self.img_count = len(self.m_img_list)
         self.open_next_image()
@@ -1480,7 +1570,7 @@ class MainWindow(QMainWindow, WindowMixin):
 
         if filename:
             self.load_file(filename)
-
+            
     def open_file(self, _value=False):
         if not self.may_continue():
             return
@@ -1495,21 +1585,160 @@ class MainWindow(QMainWindow, WindowMixin):
             self.img_count = 1
             self.load_file(filename)
 
+    # def save_file(self, _value=False):
+    #     if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
+    #         if self.file_path:
+    #             image_file_name = os.path.basename(self.file_path)
+    #             saved_file_name = os.path.splitext(image_file_name)[0]
+    #             saved_path = os.path.join(ustr(self.default_save_dir), saved_file_name)
+    #             self._save_file(saved_path)
+    #     else:
+    #         image_file_dir = os.path.dirname(self.file_path)
+    #         image_file_name = os.path.basename(self.file_path)
+    #         saved_file_name = os.path.splitext(image_file_name)[0]
+    #         saved_path = os.path.join(image_file_dir, saved_file_name)
+    #         self._save_file(saved_path if self.label_file
+    #                         else self.save_file_dialog(remove_ext=False))
     def save_file(self, _value=False):
-        if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
-            if self.file_path:
-                image_file_name = os.path.basename(self.file_path)
-                saved_file_name = os.path.splitext(image_file_name)[0]
-                saved_path = os.path.join(ustr(self.default_save_dir), saved_file_name)
-                self._save_file(saved_path)
-        else:
-            image_file_dir = os.path.dirname(self.file_path)
-            image_file_name = os.path.basename(self.file_path)
-            saved_file_name = os.path.splitext(image_file_name)[0]
-            saved_path = os.path.join(image_file_dir, saved_file_name)
-            self._save_file(saved_path if self.label_file
-                            else self.save_file_dialog(remove_ext=False))
+            """Lưu file nhãn (.txt) và cập nhật cơ sở dữ liệu SQLite."""
+            get_str = lambda str_id: self.string_bundle.get_string(str_id)
+            if not self.file_path:
+                self.show_error(get_str('noImageLoaded'))
+                return
 
+            # Lưu file nhãn (.txt)
+            try:
+                if self.default_save_dir is not None and len(ustr(self.default_save_dir)):
+                    image_file_name = os.path.basename(self.file_path)
+                    saved_file_name = os.path.splitext(image_file_name)[0]
+                    saved_path = os.path.join(ustr(self.default_save_dir), saved_file_name)
+                    self._save_file(saved_path)
+                else:
+                    image_file_dir = os.path.dirname(self.file_path)
+                    image_file_name = os.path.basename(self.file_path)
+                    saved_file_name = os.path.splitext(image_file_name)[0]
+                    saved_path = os.path.join(image_file_dir, saved_file_name)
+                    self._save_file(saved_path if self.label_file
+                                    else self.save_file_dialog(remove_ext=False))
+            except Exception as e:
+                self.show_error(f"{get_str('saveFileFailed')}: {str(e)}")
+                return
+
+            # Cập nhật temp_data với thông tin nhãn từ ảnh hiện tại
+            if self.label_file:
+                # try:
+                    self._update_temp_data()
+                    # Lưu vào cơ sở dữ liệu SQLite
+                    self.label_manager.save_data(self.temp_data)
+                    print("Data saved to SQLite database successfully.")
+                # except Exception as e:
+                #     print(f"Error saving data to SQLite database: {str(e)}")
+            else:
+                print("No label file found. Skipping database update.")
+
+    def _update_temp_data(self):
+        """Cập nhật temp_data với thông tin nhãn từ ảnh hiện tại."""
+        if not self.file_path or not self.label_file:
+            return
+
+        image_id = os.path.splitext(os.path.basename(self.file_path))[0]
+        file_name = os.path.basename(self.file_path)
+
+        # Trích xuất nhãn từ self.label_file.shapes
+        label_ids = set()
+        bounding_boxes = []
+        
+        # Get image dimensions for normalization
+        image_width = self.image.width()
+        image_height = self.image.height()
+
+        for shape in self.label_file.shapes:
+            class_id = str(shape["label"])  # YOLO class_id is stored in shape["label"]
+            label_ids.add(class_id)
+
+            # Convert points to YOLO format (x_center, y_center, width, height)
+            points = shape["points"]  # List of (x, y) tuples
+            if len(points) < 2:
+                continue  # Skip invalid shapes
+
+            # Calculate bounding box
+            x_coords = [p[0] for p in points]
+            y_coords = [p[1] for p in points]
+            x_min, x_max = min(x_coords), max(x_coords)
+            y_min, y_max = min(y_coords), max(y_coords)
+
+            # Compute YOLO coordinates (normalized)
+            x_center = ((x_min + x_max) / 2) / image_width
+            y_center = ((y_min + y_max) / 2) / image_height
+            width = (x_max - x_min) / image_width
+            height = (y_max - y_min) / image_height
+
+            bounding_boxes.append({
+                "label_id": class_id,
+                "x_center": x_center,
+                "y_center": y_center,
+                "width": width,
+                "height": height
+            })
+
+            # Thêm nhãn vào temp_data.labels nếu chưa có
+            if not any(label["id"] == class_id for label in self.temp_data["labels"]):
+                self.temp_data["labels"].append({
+                    "id": class_id,
+                    "name": f"label_{class_id}",
+                    "description": ""
+                })
+
+        # Cập nhật hoặc thêm ảnh vào temp_data.images
+        for image in self.temp_data["images"]:
+            if image["image_id"] == image_id:
+                image["file_name"] = file_name
+                image["label_ids"] = list(label_ids)
+                image["bounding_boxes"] = bounding_boxes
+                break
+        else:
+            self.temp_data["images"].append({
+                "image_id": image_id,
+                "file_name": file_name,
+                "label_ids": list(label_ids),
+                "bounding_boxes": bounding_boxes
+            })
+
+    def _load_temp_data(self):
+        """Tải dữ liệu từ cơ sở dữ liệu vào temp_data."""
+        self.temp_data["labels"] = []
+        self.temp_data["images"] = []
+
+        # Lấy nhãn
+        self.cursor.execute("SELECT id, name, description FROM labels")
+        self.temp_data["labels"] = [
+            {"id": row[0], "name": row[1], "description": row[2]}
+            for row in self.cursor.fetchall()
+        ]
+        
+        # Lấy ảnh, quan hệ ảnh-nhãn, và hộp giới hạn
+        self.cursor.execute("SELECT image_id, file_name FROM images")
+        images = self.cursor.fetchall()
+        for image_id, file_name in images:
+            self.cursor.execute("SELECT label_id FROM image_labels WHERE image_id = ?", (image_id,))
+            label_ids = [row[0] for row in self.cursor.fetchall()]
+            
+            self.cursor.execute("""
+                SELECT label_id, x_center, y_center, width, height
+                FROM bounding_boxes
+                WHERE image_id = ?
+            """, (image_id,))
+            bounding_boxes = [
+                {"label_id": row[0], "x_center": row[1], "y_center": row[2], "width": row[3], "height": row[4]}
+                for row in self.cursor.fetchall()
+            ]
+            
+            self.temp_data["images"].append({
+                "image_id": image_id,
+                "file_name": file_name,
+                "label_ids": label_ids,
+                "bounding_boxes": bounding_boxes
+            })
     def save_file_as(self, _value=False):
         assert not self.image.isNull(), "cannot save empty image"
         self._save_file(self.save_file_dialog())
@@ -1553,7 +1782,7 @@ class MainWindow(QMainWindow, WindowMixin):
             idx = self.cur_img_idx
             if os.path.exists(delete_path):
                 os.remove(delete_path)
-            self.import_dir_images(self.last_open_dir)
+            self.import_dir_images(self.image_last_open_dir)
             if self.img_count > 0:
                 self.cur_img_idx = min(idx, self.img_count - 1)
                 filename = self.img_paths[self.cur_img_idx]
