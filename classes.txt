@@ -1,0 +1,25 @@
+0: Chuỗi cách điện kép
+1: Chuỗi cách điện kép composite
+2: Chuỗi cách điện đơn
+3: Chuỗi cách điện đơn composite
+4: Chuỗi néo dây chống sét
+5: Chuỗi néo dây cáp quang
+6: Chuỗi đỡ dây chống sét
+7: Chuỗi đỡ dây cáp quang
+8: Dây dẫn - Dây chống sét
+9: Kẹp dây dẫn
+10: Móng cột
+11: Sừng phóng điện
+12: Tạ bù
+13: Tạ chống rung
+14: Vòng Corona
+15: Hư hỏng - Biển báo - Rỉ sét
+16: Hư hỏng - Chuỗi cách điện - Phóng điện
+17: Hư hỏng - Chuỗi cách điện - Vỡ
+18: Hư hỏng - Chuỗi cách điện Composite - Rách tán
+19: Hư hỏng - Dây - Tưa, đứt sợi
+20: Hư hỏng - Khung định vị - Gãy
+21: Hư hỏng - Móng cột - Sạt lở
+22: Hư hỏng - Sừng phóng điện - Gãy, cong
+23: hư hỏng - tạ chống rung - gãy
+24: Hư hỏng - Vật lạ bám (diều, bạt)
